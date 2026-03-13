@@ -16,8 +16,11 @@
 
 import pathlib
 import re
+from typing import Any
 from quart import request, make_response
 from pathlib import Path
+from pydantic import BaseModel, ConfigDict, Field
+from quart_schema import DataSource, document_querystring, document_request, document_response, tag
 
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
@@ -32,50 +35,215 @@ from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_heade
 from common import settings
 from common.constants import RetCode
 
+
+class FileRecord(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(description="File ID")
+    name: str = Field(description="File or folder name")
+    type: str | None = Field(default=None, description="File type")
+    size: int | None = Field(default=None, description="File size in bytes")
+    parent_id: str | None = Field(default=None, description="Parent folder ID")
+
+
+class FolderRecord(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(description="Folder ID")
+    name: str = Field(description="Folder name")
+    type: str | None = Field(default=None, description="Folder type")
+
+
+class RuntimeAttachmentDescriptor(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(description="Runtime attachment ID")
+    name: str = Field(description="Attachment name")
+    extension: str | None = Field(default=None, description="File extension")
+    mime_type: str | None = Field(default=None, description="Detected MIME type")
+    size: int | None = Field(default=None, description="Attachment size in bytes")
+    preview_url: str | None = Field(default=None, description="Optional preview URL")
+    created_at: float | None = Field(default=None, description="Creation timestamp")
+
+
+class ErrorResponse(BaseModel):
+    code: int = Field(description="Response code")
+    message: str = Field(description="Response message")
+    data: Any | None = Field(default=None, description="Response payload")
+
+
+class FileUploadForm(BaseModel):
+    model_config = ConfigDict(
+        extra="allow",
+        json_schema_extra={"example": {"parent_id": "folder_id_123"}},
+    )
+
+    file: list[bytes] = Field(description="One or more files (multipart/form-data).")
+    parent_id: str | None = Field(default=None, description="Parent folder ID (defaults to root).")
+
+
+class FileUploadResponse(BaseModel):
+    code: int = Field(description="Response code")
+    message: str = Field(description="Response message")
+    data: list[FileRecord] = Field(description="Uploaded files.")
+
+
+class FileUploadInfoForm(BaseModel):
+    model_config = ConfigDict(extra="allow", json_schema_extra={"example": {}})
+
+    file: list[bytes] | None = Field(default=None, description="Optional runtime attachment file(s).")
+
+
+class FileUploadInfoQuery(BaseModel):
+    url: str | None = Field(default=None, description="Optional URL to fetch and convert into a runtime attachment.")
+
+
+class FileUploadInfoResponse(BaseModel):
+    code: int = Field(description="Response code")
+    message: str = Field(description="Response message")
+    data: RuntimeAttachmentDescriptor | list[RuntimeAttachmentDescriptor] = Field(
+        description="A single runtime attachment descriptor or a list of descriptors."
+    )
+
+
+class FileCreateBody(BaseModel):
+    model_config = ConfigDict(
+        extra="allow",
+        json_schema_extra={"example": {"name": "Invoices", "parent_id": "folder_id_123", "type": "FOLDER"}},
+    )
+
+    name: str = Field(description="Name of the file or folder.")
+    parent_id: str | None = Field(default=None, description="Parent folder ID (defaults to root).")
+    type: str | None = Field(default=None, description="File type. Accepted values: FOLDER or VIRTUAL.")
+
+
+class FileCreateResponse(BaseModel):
+    code: int = Field(description="Response code")
+    message: str = Field(description="Response message")
+    data: FileRecord = Field(description="Created file or folder.")
+
+
+class FileListQuery(BaseModel):
+    parent_id: str | None = Field(default=None, description="Folder ID to list files from.")
+    keywords: str | None = Field(default=None, description="Search keyword filter.")
+    page: int | None = Field(default=1, description="Page number.")
+    page_size: int | None = Field(default=15, description="Number of results per page.")
+    orderby: str | None = Field(default="create_time", description="Sort field.")
+    desc: bool | None = Field(default=True, description="Whether sorting is descending.")
+
+
+class FileListData(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    total: int = Field(description="Total number of matching files.")
+    files: list[FileRecord] = Field(description="Files in the requested folder.")
+    parent_folder: FolderRecord = Field(description="Parent folder metadata.")
+
+
+class FileListResponse(BaseModel):
+    code: int = Field(description="Response code")
+    message: str = Field(description="Response message")
+    data: FileListData = Field(description="Paginated file listing.")
+
+
+class RootFolderData(BaseModel):
+    root_folder: FolderRecord = Field(description="User root folder.")
+
+
+class RootFolderResponse(BaseModel):
+    code: int = Field(description="Response code")
+    message: str = Field(description="Response message")
+    data: RootFolderData = Field(description="Root folder payload.")
+
+
+class FileIdQuery(BaseModel):
+    file_id: str = Field(description="Target file ID.")
+
+
+class ParentFolderData(BaseModel):
+    parent_folder: FolderRecord = Field(description="Parent folder metadata.")
+
+
+class ParentFolderResponse(BaseModel):
+    code: int = Field(description="Response code")
+    message: str = Field(description="Response message")
+    data: ParentFolderData = Field(description="Parent folder payload.")
+
+
+class ParentFoldersData(BaseModel):
+    parent_folders: list[FolderRecord] = Field(description="All parent folders.")
+
+
+class ParentFoldersResponse(BaseModel):
+    code: int = Field(description="Response code")
+    message: str = Field(description="Response message")
+    data: ParentFoldersData = Field(description="All parent folders payload.")
+
+
+class FileRmBody(BaseModel):
+    model_config = ConfigDict(extra="allow", json_schema_extra={"example": {"file_ids": ["file_id_1", "file_id_2"]}})
+
+    file_ids: list[str] = Field(description="List of file or folder IDs to delete.")
+
+
+class BooleanResponse(BaseModel):
+    code: int = Field(description="Response code")
+    message: str = Field(description="Response message")
+    data: bool = Field(description="Operation result.")
+
+
+class FileRenameBody(BaseModel):
+    model_config = ConfigDict(extra="allow", json_schema_extra={"example": {"file_id": "file_id_1", "name": "renamed.pdf"}})
+
+    file_id: str = Field(description="Target file ID.")
+    name: str = Field(description="New file name.")
+
+
+class AttachmentDownloadQuery(BaseModel):
+    ext: str | None = Field(default="markdown", description="File extension used to determine the response content type.")
+
+
+class FileMoveBody(BaseModel):
+    model_config = ConfigDict(
+        extra="allow",
+        json_schema_extra={"example": {"src_file_ids": ["file_id_1"], "dest_file_id": "folder_id_123"}},
+    )
+
+    src_file_ids: list[str] = Field(description="Source file IDs.")
+    dest_file_id: str = Field(description="Destination folder ID.")
+
+
+class FileConvertBody(BaseModel):
+    model_config = ConfigDict(
+        extra="allow",
+        json_schema_extra={"example": {"kb_ids": ["dataset_id_1"], "file_ids": ["file_id_1"]}},
+    )
+
+    kb_ids: list[str] = Field(description="Dataset IDs that will receive the converted documents.")
+    file_ids: list[str] = Field(description="File or folder IDs to convert.")
+
+
+class FileConvertLink(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: str | None = Field(default=None, description="File-to-document relationship ID.")
+    file_id: str | None = Field(default=None, description="File ID.")
+    document_id: str | None = Field(default=None, description="Document ID.")
+
+
+class FileConvertResponse(BaseModel):
+    code: int = Field(description="Response code")
+    message: str = Field(description="Response message")
+    data: list[FileConvertLink] = Field(description="File-to-document relationships created during conversion.")
+
 @manager.route('/file/upload', methods=['POST'])  # noqa: F821
 @token_required
+@tag(["SDK Files"])
+@document_request(FileUploadForm, source=DataSource.FORM_MULTIPART)
+@document_response(FileUploadResponse)
+@document_response(ErrorResponse, 400)
 async def upload(tenant_id):
-    """
-    Upload a file to the system.
-    ---
-    tags:
-      - File
-    security:
-      - ApiKeyAuth: []
-    parameters:
-      - in: formData
-        name: file
-        type: file
-        required: true
-        description: The file to upload
-      - in: formData
-        name: parent_id
-        type: string
-        description: Parent folder ID where the file will be uploaded. Optional.
-    responses:
-      200:
-        description: Successfully uploaded the file.
-        schema:
-          type: object
-          properties:
-            data:
-              type: array
-              items:
-                type: object
-                properties:
-                  id:
-                    type: string
-                    description: File ID
-                  name:
-                    type: string
-                    description: File name
-                  size:
-                    type: integer
-                    description: File size in bytes
-                  type:
-                    type: string
-                    description: File type (e.g., document, folder)
-    """
+    """Upload one or more files."""
     form = await request.form
     files = await request.files
     pf_id = form.get("parent_id")
@@ -150,29 +318,13 @@ async def upload(tenant_id):
 
 @manager.route("/file/upload_info", methods=["POST"])  # noqa: F821
 @token_required
+@tag(["SDK Files"])
+@document_request(FileUploadInfoForm, source=DataSource.FORM_MULTIPART)
+@document_querystring(FileUploadInfoQuery)
+@document_response(FileUploadInfoResponse)
+@document_response(ErrorResponse, 400)
 async def upload_info(tenant_id):
-    """
-    Upload runtime file metadata for SDK chat completions.
-    ---
-    tags:
-      - File
-    security:
-      - ApiKeyAuth: []
-    parameters:
-      - in: formData
-        name: file
-        type: file
-        required: false
-        description: File(s) to upload as runtime attachments.
-      - in: query
-        name: url
-        type: string
-        required: false
-        description: Optional URL to fetch and convert into a runtime attachment.
-    responses:
-      200:
-        description: Runtime attachment descriptor(s) for the `files` field in completions requests.
-    """
+    """Upload runtime file metadata for SDK chat completions."""
     files = await request.files
     file_objs = files.getlist("file") if files and files.get("file") else []
     url = request.args.get("url")
@@ -206,48 +358,12 @@ async def upload_info(tenant_id):
 
 @manager.route('/file/create', methods=['POST'])  # noqa: F821
 @token_required
+@tag(["SDK Files"])
+@document_request(FileCreateBody, source=DataSource.JSON)
+@document_response(FileCreateResponse)
+@document_response(ErrorResponse, 400)
 async def create(tenant_id):
-    """
-    Create a new file or folder.
-    ---
-    tags:
-      - File
-    security:
-      - ApiKeyAuth: []
-    parameters:
-      - in: body
-        name: body
-        description: File creation parameters
-        required: true
-        schema:
-          type: object
-          properties:
-            name:
-              type: string
-              description: Name of the file/folder
-            parent_id:
-              type: string
-              description: Parent folder ID. Optional.
-            type:
-              type: string
-              enum: ["FOLDER", "VIRTUAL"]
-              description: Type of the file
-    responses:
-      200:
-        description: File created successfully.
-        schema:
-          type: object
-          properties:
-            data:
-              type: object
-              properties:
-                id:
-                  type: string
-                name:
-                  type: string
-                type:
-                  type: string
-    """
+    """Create a new file or folder."""
     req = await get_request_json()
     pf_id = req.get("parent_id")
     input_file_type = req.get("type")
@@ -285,68 +401,11 @@ async def create(tenant_id):
 
 @manager.route('/file/list', methods=['GET'])  # noqa: F821
 @token_required
+@tag(["SDK Files"])
+@document_querystring(FileListQuery)
+@document_response(FileListResponse)
 async def list_files(tenant_id):
-    """
-    List files under a specific folder.
-    ---
-    tags:
-      - File
-    security:
-      - ApiKeyAuth: []
-    parameters:
-      - in: query
-        name: parent_id
-        type: string
-        description: Folder ID to list files from
-      - in: query
-        name: keywords
-        type: string
-        description: Search keyword filter
-      - in: query
-        name: page
-        type: integer
-        default: 1
-        description: Page number
-      - in: query
-        name: page_size
-        type: integer
-        default: 15
-        description: Number of results per page
-      - in: query
-        name: orderby
-        type: string
-        default: "create_time"
-        description: Sort by field
-      - in: query
-        name: desc
-        type: boolean
-        default: true
-        description: Descending order
-    responses:
-      200:
-        description: Successfully retrieved file list.
-        schema:
-          type: object
-          properties:
-            total:
-              type: integer
-            files:
-              type: array
-              items:
-                type: object
-                properties:
-                  id:
-                    type: string
-                  name:
-                    type: string
-                  type:
-                    type: string
-                  size:
-                    type: integer
-                  create_time:
-                    type: string
-                    format: date-time
-    """
+    """List files under a specific folder."""
     pf_id = request.args.get("parent_id")
     keywords = request.args.get("keywords", "")
     page_number = int(request.args.get("page", 1))
@@ -377,33 +436,10 @@ async def list_files(tenant_id):
 
 @manager.route('/file/root_folder', methods=['GET'])  # noqa: F821
 @token_required
+@tag(["SDK Files"])
+@document_response(RootFolderResponse)
 async def get_root_folder(tenant_id):
-    """
-    Get user's root folder.
-    ---
-    tags:
-      - File
-    security:
-      - ApiKeyAuth: []
-    responses:
-      200:
-        description: Root folder information
-        schema:
-          type: object
-          properties:
-            data:
-              type: object
-              properties:
-                root_folder:
-                  type: object
-                  properties:
-                    id:
-                      type: string
-                    name:
-                      type: string
-                    type:
-                      type: string
-    """
+    """Get the current user's root folder."""
     try:
         root_folder = FileService.get_root_folder(tenant_id)
         return get_json_result(data={"root_folder": root_folder})
@@ -413,37 +449,12 @@ async def get_root_folder(tenant_id):
 
 @manager.route('/file/parent_folder', methods=['GET'])  # noqa: F821
 @token_required
+@tag(["SDK Files"])
+@document_querystring(FileIdQuery)
+@document_response(ParentFolderResponse)
+@document_response(ErrorResponse, 404)
 async def get_parent_folder():
-    """
-    Get parent folder info of a file.
-    ---
-    tags:
-      - File
-    security:
-      - ApiKeyAuth: []
-    parameters:
-      - in: query
-        name: file_id
-        type: string
-        required: true
-        description: Target file ID
-    responses:
-      200:
-        description: Parent folder information
-        schema:
-          type: object
-          properties:
-            data:
-              type: object
-              properties:
-                parent_folder:
-                  type: object
-                  properties:
-                    id:
-                      type: string
-                    name:
-                      type: string
-    """
+    """Get parent folder info for a file."""
     file_id = request.args.get("file_id")
     try:
         e, file = FileService.get_by_id(file_id)
@@ -458,39 +469,12 @@ async def get_parent_folder():
 
 @manager.route('/file/all_parent_folder', methods=['GET'])  # noqa: F821
 @token_required
+@tag(["SDK Files"])
+@document_querystring(FileIdQuery)
+@document_response(ParentFoldersResponse)
+@document_response(ErrorResponse, 404)
 async def get_all_parent_folders(tenant_id):
-    """
-    Get all parent folders of a file.
-    ---
-    tags:
-      - File
-    security:
-      - ApiKeyAuth: []
-    parameters:
-      - in: query
-        name: file_id
-        type: string
-        required: true
-        description: Target file ID
-    responses:
-      200:
-        description: All parent folders of the file
-        schema:
-          type: object
-          properties:
-            data:
-              type: object
-              properties:
-                parent_folders:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      id:
-                        type: string
-                      name:
-                        type: string
-    """
+    """Get all parent folders for a file."""
     file_id = request.args.get("file_id")
     try:
         e, file = FileService.get_by_id(file_id)
@@ -506,37 +490,12 @@ async def get_all_parent_folders(tenant_id):
 
 @manager.route('/file/rm', methods=['POST'])  # noqa: F821
 @token_required
+@tag(["SDK Files"])
+@document_request(FileRmBody, source=DataSource.JSON)
+@document_response(BooleanResponse)
+@document_response(ErrorResponse, 404)
 async def rm(tenant_id):
-    """
-    Delete one or multiple files/folders.
-    ---
-    tags:
-      - File
-    security:
-      - ApiKeyAuth: []
-    parameters:
-      - in: body
-        name: body
-        description: Files to delete
-        required: true
-        schema:
-          type: object
-          properties:
-            file_ids:
-              type: array
-              items:
-                type: string
-              description: List of file IDs to delete
-    responses:
-      200:
-        description: Successfully deleted files
-        schema:
-          type: object
-          properties:
-            data:
-              type: boolean
-              example: true
-    """
+    """Delete one or multiple files or folders."""
     req = await get_request_json()
     file_ids = req["file_ids"]
     try:
@@ -580,38 +539,13 @@ async def rm(tenant_id):
 
 @manager.route('/file/rename', methods=['POST'])  # noqa: F821
 @token_required
+@tag(["SDK Files"])
+@document_request(FileRenameBody, source=DataSource.JSON)
+@document_response(BooleanResponse)
+@document_response(ErrorResponse, 400)
+@document_response(ErrorResponse, 404)
 async def rename(tenant_id):
-    """
-    Rename a file.
-    ---
-    tags:
-      - File
-    security:
-      - ApiKeyAuth: []
-    parameters:
-      - in: body
-        name: body
-        description: Rename file
-        required: true
-        schema:
-          type: object
-          properties:
-            file_id:
-              type: string
-              description: Target file ID
-            name:
-              type: string
-              description: New name for the file
-    responses:
-      200:
-        description: File renamed successfully
-        schema:
-          type: object
-          properties:
-            data:
-              type: boolean
-              example: true
-    """
+    """Rename a file."""
     req = await get_request_json()
     try:
         e, file = FileService.get_by_id(req["file_id"])
@@ -643,30 +577,9 @@ async def rename(tenant_id):
 
 @manager.route('/file/get/<file_id>', methods=['GET'])  # noqa: F821
 @token_required
+@tag(["SDK Files"])
 async def get(tenant_id, file_id):
-    """
-    Download a file.
-    ---
-    tags:
-      - File
-    security:
-      - ApiKeyAuth: []
-    produces:
-      - application/octet-stream
-    parameters:
-      - in: path
-        name: file_id
-        type: string
-        required: true
-        description: File ID to download
-    responses:
-      200:
-        description: File stream
-        schema:
-          type: file
-      RetCode.NOT_FOUND:
-        description: File not found
-    """
+    """Download a file."""
     try:
         e, file = FileService.get_by_id(file_id)
         if not e:
@@ -692,7 +605,10 @@ async def get(tenant_id, file_id):
 
 @manager.route("/file/download/<attachment_id>", methods=["GET"])  # noqa: F821
 @token_required
+@tag(["SDK Files"])
+@document_querystring(AttachmentDownloadQuery)
 async def download_attachment(tenant_id, attachment_id):
+    """Download a runtime attachment by its attachment ID."""
     try:
         ext = request.args.get("ext", "markdown")
         data = await thread_pool_exec(settings.STORAGE_IMPL.get, tenant_id, attachment_id)
@@ -708,40 +624,12 @@ async def download_attachment(tenant_id, attachment_id):
 
 @manager.route('/file/mv', methods=['POST'])  # noqa: F821
 @token_required
+@tag(["SDK Files"])
+@document_request(FileMoveBody, source=DataSource.JSON)
+@document_response(BooleanResponse)
+@document_response(ErrorResponse, 404)
 async def move(tenant_id):
-    """
-    Move one or multiple files to another folder.
-    ---
-    tags:
-      - File
-    security:
-      - ApiKeyAuth: []
-    parameters:
-      - in: body
-        name: body
-        description: Move operation
-        required: true
-        schema:
-          type: object
-          properties:
-            src_file_ids:
-              type: array
-              items:
-                type: string
-              description: Source file IDs
-            dest_file_id:
-              type: string
-              description: Destination folder ID
-    responses:
-      200:
-        description: Files moved successfully
-        schema:
-          type: object
-          properties:
-            data:
-              type: boolean
-              example: true
-    """
+    """Move one or multiple files to another folder."""
     req = await get_request_json()
     try:
         file_ids = req["src_file_ids"]
@@ -768,7 +656,12 @@ async def move(tenant_id):
 
 @manager.route('/file/convert', methods=['POST'])  # noqa: F821
 @token_required
+@tag(["SDK Files"])
+@document_request(FileConvertBody, source=DataSource.JSON)
+@document_response(FileConvertResponse)
+@document_response(ErrorResponse, 404)
 async def convert(tenant_id):
+    """Convert SDK files or folders into dataset documents."""
     req = await get_request_json()
     kb_ids = req["kb_ids"]
     file_ids = req["file_ids"]
