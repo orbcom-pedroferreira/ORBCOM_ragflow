@@ -16,14 +16,33 @@
 
 
 from quart import Response
+from pydantic import BaseModel
+from quart_schema import document_response, tag
+
 from api.apps import login_required
 from api.utils.api_utils import get_json_result
 from agent.plugin import GlobalPluginManager
 
 
+class ErrorResponse(BaseModel):
+    code: int
+    message: str
+    data: dict | None = None
+
+
+class GenericSuccessResponse(BaseModel):
+    code: int = 0
+    data: list[dict] | None = None
+    message: str = "success"
+
+
 @manager.route('/llm_tools', methods=['GET'])  # noqa: F821
 @login_required
+@tag(["Plugins"])
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 def llm_tools() -> Response:
+    """List LLM tool plugins available to the current user."""
     tools = GlobalPluginManager.get_llm_tools()
     tools_metadata = [t.get_metadata() for t in tools]
 
