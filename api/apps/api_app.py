@@ -14,7 +14,12 @@
 #  limitations under the License.
 #
 from datetime import datetime, timedelta
+from typing import Any
+
 from quart import request
+from pydantic import BaseModel, ConfigDict, Field
+from quart_schema import document_querystring, document_request, document_response, tag
+
 from api.db.db_models import APIToken
 from api.db.services.api_service import APITokenService, API4ConversationService
 from api.db.services.user_service import UserTenantService
@@ -23,9 +28,72 @@ from common.time_utils import current_timestamp, datetime_format
 from api.apps import login_required, current_user
 
 
+class ErrorResponse(BaseModel):
+    code: int
+    message: str
+    data: Any | None = None
+
+
+class GenericSuccessResponse(BaseModel):
+    code: int = 0
+    data: Any | None = None
+    message: str = "success"
+
+
+class ApiTokenCreateBodyDoc(BaseModel):
+    dialog_id: str | None = Field(default=None, description="Chat dialog ID associated with the token.")
+    canvas_id: str | None = Field(default=None, description="Canvas ID associated with the token.")
+
+
+class ApiTokenRecordDoc(BaseModel):
+    token: str
+    tenant_id: str | None = None
+    dialog_id: str | None = None
+    source: str | None = None
+    create_time: int | None = None
+    create_date: str | None = None
+    update_time: int | None = None
+    update_date: str | None = None
+    model_config = ConfigDict(extra="allow")
+
+
+class ApiTokenListQueryDoc(BaseModel):
+    dialog_id: str | None = Field(default=None, description="Dialog ID filter.")
+    canvas_id: str | None = Field(default=None, description="Canvas ID filter.")
+
+
+class ApiTokenListResponseDoc(BaseModel):
+    code: int = 0
+    data: list[ApiTokenRecordDoc]
+    message: str = "success"
+
+
+class ApiTokenDeleteBodyDoc(BaseModel):
+    tokens: list[str] = Field(description="API tokens to delete.")
+    tenant_id: str = Field(description="Tenant ID owning the tokens.")
+
+
+class StatsQueryDoc(BaseModel):
+    dialog_id: str | None = Field(default=None, description="Dialog ID filter.")
+    canvas_id: str | None = Field(default=None, description="Canvas ID filter.")
+    from_date: str | None = Field(default=None, description="Start date in '%Y-%m-%d %H:%M:%S' format.")
+    to_date: str | None = Field(default=None, description="End date in '%Y-%m-%d %H:%M:%S' format.")
+
+
+class ApiStatsResponseDoc(BaseModel):
+    code: int = 0
+    data: dict[str, list[tuple[Any, Any]]]
+    message: str = "success"
+
+
 @manager.route('/new_token', methods=['POST'])  # noqa: F821
 @login_required
+@tag(["API App"])
+@document_request(ApiTokenCreateBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def new_token():
+    """Create a conversation or canvas API token."""
     req = await get_request_json()
     try:
         tenants = UserTenantService.query(user_id=current_user.id)
@@ -55,7 +123,12 @@ async def new_token():
 
 @manager.route('/token_list', methods=['GET'])  # noqa: F821
 @login_required
+@tag(["API App"])
+@document_querystring(ApiTokenListQueryDoc)
+@document_response(ApiTokenListResponseDoc)
+@document_response(ErrorResponse, 400)
 def token_list():
+    """List API tokens for a dialog or canvas."""
     try:
         tenants = UserTenantService.query(user_id=current_user.id)
         if not tenants:
@@ -71,7 +144,12 @@ def token_list():
 @manager.route('/rm', methods=['POST'])  # noqa: F821
 @validate_request("tokens", "tenant_id")
 @login_required
+@tag(["API App"])
+@document_request(ApiTokenDeleteBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def rm():
+    """Delete API tokens for a tenant."""
     req = await get_request_json()
     try:
         for token in req["tokens"]:
@@ -84,7 +162,12 @@ async def rm():
 
 @manager.route('/stats', methods=['GET'])  # noqa: F821
 @login_required
+@tag(["API App"])
+@document_querystring(StatsQueryDoc)
+@document_response(ApiStatsResponseDoc)
+@document_response(ErrorResponse, 400)
 def stats():
+    """Get API usage statistics for a dialog or canvas."""
     try:
         tenants = UserTenantService.query(user_id=current_user.id)
         if not tenants:
