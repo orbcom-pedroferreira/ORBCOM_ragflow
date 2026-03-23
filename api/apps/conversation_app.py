@@ -19,7 +19,10 @@ import re
 import logging
 from copy import deepcopy
 import tempfile
+from typing import Any
+from pydantic import BaseModel, ConfigDict, Field
 from quart import Response, request
+from quart_schema import document_querystring, document_request, document_response, tag
 from api.apps import current_user, login_required
 from api.db.db_models import APIToken
 from api.db.services.conversation_service import ConversationService, structure_answer
@@ -35,8 +38,90 @@ from rag.prompts.generator import chunks_format
 from common.constants import RetCode, LLMType
 
 
+class ErrorResponse(BaseModel):
+    code: int = 0
+    data: Any | None = None
+    message: str
+
+
+class GenericSuccessResponse(BaseModel):
+    code: int = 0
+    data: Any | None = None
+    message: str = "success"
+
+
+class ConversationGetQueryDoc(BaseModel):
+    conversation_id: str = Field(..., description="Conversation ID.")
+
+
+class ConversationListQueryDoc(BaseModel):
+    dialog_id: str = Field(..., description="Dialog ID.")
+
+
+class ConversationSetBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    is_new: bool = Field(..., description="Whether this is a new conversation.")
+    conversation_id: str | None = Field(default=None, description="Conversation ID.")
+    dialog_id: str | None = Field(default=None, description="Dialog ID.")
+    name: str | None = Field(default=None, description="Conversation name.")
+
+
+class ConversationDeleteBodyDoc(BaseModel):
+    conversation_ids: list[str] = Field(..., description="Conversation IDs to delete.")
+
+
+class ConversationCompletionBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    conversation_id: str = Field(..., description="Conversation ID.")
+    messages: list[dict[str, Any]] = Field(..., description="Conversation messages.")
+    llm_id: str | None = Field(default=None, description="Override chat model ID.")
+    stream: bool | None = Field(default=None, description="Whether to stream the response.")
+    temperature: float | None = Field(default=None, description="Sampling temperature.")
+    top_p: float | None = Field(default=None, description="Top-p sampling.")
+    frequency_penalty: float | None = Field(default=None, description="Frequency penalty.")
+    presence_penalty: float | None = Field(default=None, description="Presence penalty.")
+    max_tokens: int | None = Field(default=None, description="Maximum tokens.")
+
+
+class ConversationDeleteMsgBodyDoc(BaseModel):
+    conversation_id: str = Field(..., description="Conversation ID.")
+    message_id: str = Field(..., description="Message ID.")
+
+
+class ConversationThumbupBodyDoc(BaseModel):
+    conversation_id: str = Field(..., description="Conversation ID.")
+    message_id: str = Field(..., description="Message ID.")
+    thumbup: bool | None = Field(default=None, description="Thumbs-up flag.")
+    feedback: str | None = Field(default=None, description="Feedback text.")
+
+
+class ConversationAskBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    question: str = Field(..., description="Question to ask.")
+    kb_ids: list[str] = Field(..., description="Knowledge base IDs.")
+    search_id: str | None = Field(default=None, description="Search app ID.")
+
+
+class ConversationMindmapBodyDoc(BaseModel):
+    question: str = Field(..., description="Question to generate the mind map from.")
+    kb_ids: list[str] = Field(..., description="Knowledge base IDs.")
+    search_id: str | None = Field(default=None, description="Search app ID.")
+
+
+class ConversationRelatedQuestionsBodyDoc(BaseModel):
+    question: str = Field(..., description="Question to expand.")
+    search_id: str | None = Field(default=None, description="Search app ID.")
+
+
 @manager.route("/set", methods=["POST"])  # noqa: F821
 @login_required
+@tag(["Conversations"])
+@document_request(ConversationSetBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def set_conversation():
     req = await get_request_json()
     conv_id = req.get("conversation_id")
@@ -81,6 +166,10 @@ async def set_conversation():
 
 @manager.route("/get", methods=["GET"])  # noqa: F821
 @login_required
+@tag(["Conversations"])
+@document_querystring(ConversationGetQueryDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def get():
     conv_id = request.args["conversation_id"]
     try:
@@ -109,6 +198,9 @@ async def get():
 
 
 @manager.route("/getsse/<dialog_id>", methods=["GET"])  # type: ignore # noqa: F821
+@tag(["Conversations"])
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 def getsse(dialog_id):
     token = request.headers.get("Authorization").split()
     if len(token) != 2:
@@ -131,6 +223,10 @@ def getsse(dialog_id):
 
 @manager.route("/rm", methods=["POST"])  # noqa: F821
 @login_required
+@tag(["Conversations"])
+@document_request(ConversationDeleteBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def rm():
     req = await get_request_json()
     conv_ids = req["conversation_ids"]
@@ -153,6 +249,10 @@ async def rm():
 
 @manager.route("/list", methods=["GET"])  # noqa: F821
 @login_required
+@tag(["Conversations"])
+@document_querystring(ConversationListQueryDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def list_conversation():
     dialog_id = request.args["dialog_id"]
     try:
@@ -169,6 +269,9 @@ async def list_conversation():
 @manager.route("/completion", methods=["POST"])  # noqa: F821
 @login_required
 @validate_request("conversation_id", "messages")
+@tag(["Conversation Completions"])
+@document_request(ConversationCompletionBodyDoc)
+@document_response(ErrorResponse, 400)
 async def completion():
     req = await get_request_json()
     msg = []
@@ -255,6 +358,8 @@ async def completion():
 
 @manager.route("/sequence2txt", methods=["POST"])  # noqa: F821
 @login_required
+@tag(["Conversation Media"])
+@document_response(ErrorResponse, 400)
 async def sequence2txt():
     req = await request.form
     stream_mode = req.get("stream", "false").lower() == "true"
@@ -311,6 +416,8 @@ async def sequence2txt():
 
 @manager.route("/tts", methods=["POST"])  # noqa: F821
 @login_required
+@tag(["Conversation Media"])
+@document_response(ErrorResponse, 400)
 async def tts():
     req = await get_request_json()
     text = req["text"]
@@ -341,6 +448,10 @@ async def tts():
 @manager.route("/delete_msg", methods=["POST"])  # noqa: F821
 @login_required
 @validate_request("conversation_id", "message_id")
+@tag(["Conversations"])
+@document_request(ConversationDeleteMsgBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def delete_msg():
     req = await get_request_json()
     e, conv = ConversationService.get_by_id(req["conversation_id"])
@@ -364,6 +475,10 @@ async def delete_msg():
 @manager.route("/thumbup", methods=["POST"])  # noqa: F821
 @login_required
 @validate_request("conversation_id", "message_id")
+@tag(["Conversations"])
+@document_request(ConversationThumbupBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def thumbup():
     req = await get_request_json()
     e, conv = ConversationService.get_by_id(req["conversation_id"])
@@ -391,6 +506,9 @@ async def thumbup():
 @manager.route("/ask", methods=["POST"])  # noqa: F821
 @login_required
 @validate_request("question", "kb_ids")
+@tag(["Conversation Completions"])
+@document_request(ConversationAskBodyDoc)
+@document_response(ErrorResponse, 400)
 async def ask_about():
     req = await get_request_json()
     uid = current_user.id
@@ -423,6 +541,10 @@ async def ask_about():
 @manager.route("/mindmap", methods=["POST"])  # noqa: F821
 @login_required
 @validate_request("question", "kb_ids")
+@tag(["Conversation Completions"])
+@document_request(ConversationMindmapBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def mindmap():
     req = await get_request_json()
     search_id = req.get("search_id", "")
@@ -441,6 +563,10 @@ async def mindmap():
 @manager.route("/related_questions", methods=["POST"])  # noqa: F821
 @login_required
 @validate_request("question")
+@tag(["Conversation Completions"])
+@document_request(ConversationRelatedQuestionsBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def related_questions():
     req = await get_request_json()
 
