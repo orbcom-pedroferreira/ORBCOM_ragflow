@@ -13,7 +13,11 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+from typing import Any
+
 from quart import Response, request
+from pydantic import BaseModel, ConfigDict, Field
+from quart_schema import document_querystring, document_request, document_response, tag
 from api.apps import current_user, login_required
 
 from api.db.db_models import MCPServer
@@ -26,8 +30,109 @@ from api.utils.api_utils import get_data_error_result, get_json_result, get_mcp_
 from api.utils.web_utils import get_float, safe_json_parse
 from common.mcp_tool_call_conn import MCPToolCallSession, close_multiple_mcp_toolcall_sessions
 
+
+class ErrorResponse(BaseModel):
+    code: int = 0
+    data: Any | None = None
+    message: str
+
+
+class GenericSuccessResponse(BaseModel):
+    code: int = 0
+    data: Any | None = None
+    message: str | bool = "success"
+
+
+class McpListQueryDoc(BaseModel):
+    keywords: str | None = Field(default=None, description="Optional keyword filter.")
+    page: int | None = Field(default=None, description="Page number.")
+    page_size: int | None = Field(default=None, description="Items per page.")
+    orderby: str | None = Field(default=None, description="Sort field.")
+    desc: str | bool | None = Field(default=None, description="Whether to sort descending.")
+
+
+class McpListBodyDoc(BaseModel):
+    mcp_ids: list[str] | None = Field(default=None, description="Optional MCP server IDs to filter.")
+
+
+class McpDetailQueryDoc(BaseModel):
+    mcp_id: str = Field(..., description="MCP server ID.")
+
+
+class McpCreateBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    name: str = Field(..., description="MCP server name.")
+    url: str = Field(..., description="MCP server URL.")
+    server_type: str = Field(..., description="MCP server type.")
+    headers: dict[str, Any] | str | None = Field(default=None, description="Optional headers.")
+    variables: dict[str, Any] | str | None = Field(default=None, description="Optional variables.")
+    timeout: float | None = Field(default=None, description="Timeout in seconds.")
+
+
+class McpUpdateBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    mcp_id: str = Field(..., description="MCP server ID.")
+    name: str | None = Field(default=None, description="MCP server name.")
+    url: str | None = Field(default=None, description="MCP server URL.")
+    server_type: str | None = Field(default=None, description="MCP server type.")
+    headers: dict[str, Any] | str | None = Field(default=None, description="Optional headers.")
+    variables: dict[str, Any] | str | None = Field(default=None, description="Optional variables.")
+    timeout: float | None = Field(default=None, description="Timeout in seconds.")
+
+
+class McpIdListBodyDoc(BaseModel):
+    mcp_ids: list[str] = Field(..., description="MCP server IDs.")
+
+
+class McpRebuildBodyDoc(BaseModel):
+    kb_id: str = Field(..., description="Knowledge base ID.")
+
+
+class McpImportBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    mcpServers: dict[str, Any] = Field(..., description="MCP server definitions.")
+    timeout: float | None = Field(default=None, description="Timeout in seconds.")
+
+
+class McpListToolsBodyDoc(BaseModel):
+    mcp_ids: list[str] = Field(..., description="MCP server IDs.")
+    timeout: float | None = Field(default=None, description="Timeout in seconds.")
+
+
+class McpTestToolBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    mcp_id: str = Field(..., description="MCP server ID.")
+    tool_name: str = Field(..., description="Tool name.")
+    arguments: dict[str, Any] = Field(..., description="Tool arguments.")
+    timeout: float | None = Field(default=None, description="Timeout in seconds.")
+
+
+class McpCacheToolsBodyDoc(BaseModel):
+    mcp_id: str = Field(..., description="MCP server ID.")
+    tools: list[dict[str, Any]] = Field(..., description="Tool definitions to cache.")
+
+
+class McpTestBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    url: str = Field(..., description="MCP server URL.")
+    server_type: str = Field(..., description="MCP server type.")
+    timeout: float | None = Field(default=None, description="Timeout in seconds.")
+    headers: dict[str, Any] | str | None = Field(default=None, description="Optional headers.")
+    variables: dict[str, Any] | str | None = Field(default=None, description="Optional variables.")
+
+
 @manager.route("/list", methods=["POST"])  # noqa: F821
 @login_required
+@tag(["MCP Servers"])
+@document_querystring(McpListQueryDoc)
+@document_request(McpListBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def list_mcp() -> Response:
     keywords = request.args.get("keywords", "")
     page_number = int(request.args.get("page", 0))
@@ -54,6 +159,10 @@ async def list_mcp() -> Response:
 
 @manager.route("/detail", methods=["GET"])  # noqa: F821
 @login_required
+@tag(["MCP Servers"])
+@document_querystring(McpDetailQueryDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 def detail() -> Response:
     mcp_id = request.args["mcp_id"]
     try:
@@ -70,6 +179,10 @@ def detail() -> Response:
 @manager.route("/create", methods=["POST"])  # noqa: F821
 @login_required
 @validate_request("name", "url", "server_type")
+@tag(["MCP Servers"])
+@document_request(McpCreateBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def create() -> Response:
     req = await get_request_json()
 
@@ -125,6 +238,10 @@ async def create() -> Response:
 @manager.route("/update", methods=["POST"])  # noqa: F821
 @login_required
 @validate_request("mcp_id")
+@tag(["MCP Servers"])
+@document_request(McpUpdateBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def update() -> Response:
     req = await get_request_json()
 
@@ -181,6 +298,10 @@ async def update() -> Response:
 @manager.route("/rm", methods=["POST"])  # noqa: F821
 @login_required
 @validate_request("mcp_ids")
+@tag(["MCP Servers"])
+@document_request(McpIdListBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def rm() -> Response:
     req = await get_request_json()
     mcp_ids = req.get("mcp_ids", [])
@@ -199,6 +320,10 @@ async def rm() -> Response:
 @manager.route("/import", methods=["POST"])  # noqa: F821
 @login_required
 @validate_request("mcpServers")
+@tag(["MCP Servers"])
+@document_request(McpImportBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def import_multiple() -> Response:
     req = await get_request_json()
     servers = req.get("mcpServers", {})
@@ -266,6 +391,10 @@ async def import_multiple() -> Response:
 @manager.route("/export", methods=["POST"])  # noqa: F821
 @login_required
 @validate_request("mcp_ids")
+@tag(["MCP Servers"])
+@document_request(McpIdListBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def export_multiple() -> Response:
     req = await get_request_json()
     mcp_ids = req.get("mcp_ids", [])
@@ -298,6 +427,10 @@ async def export_multiple() -> Response:
 @manager.route("/list_tools", methods=["POST"])  # noqa: F821
 @login_required
 @validate_request("mcp_ids")
+@tag(["MCP Tools"])
+@document_request(McpListToolsBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def list_tools() -> Response:
     req = await get_request_json()
     mcp_ids = req.get("mcp_ids", [])
@@ -344,6 +477,10 @@ async def list_tools() -> Response:
 @manager.route("/test_tool", methods=["POST"])  # noqa: F821
 @login_required
 @validate_request("mcp_id", "tool_name", "arguments")
+@tag(["MCP Tools"])
+@document_request(McpTestToolBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def test_tool() -> Response:
     req = await get_request_json()
     mcp_id = req.get("mcp_id", "")
@@ -377,6 +514,10 @@ async def test_tool() -> Response:
 @manager.route("/cache_tools", methods=["POST"])  # noqa: F821
 @login_required
 @validate_request("mcp_id", "tools")
+@tag(["MCP Tools"])
+@document_request(McpCacheToolsBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def cache_tool() -> Response:
     req = await get_request_json()
     mcp_id = req.get("mcp_id", "")
@@ -400,6 +541,10 @@ async def cache_tool() -> Response:
 
 @manager.route("/test_mcp", methods=["POST"])  # noqa: F821
 @validate_request("url", "server_type")
+@tag(["MCP Tools"])
+@document_request(McpTestBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def test_mcp() -> Response:
     req = await get_request_json()
 
