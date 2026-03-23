@@ -18,7 +18,10 @@ import inspect
 import json
 import logging
 from functools import partial
+from typing import Any
 from quart import request, Response, make_response
+from pydantic import BaseModel, ConfigDict, Field
+from quart_schema import document_querystring, document_request, document_response, tag
 from agent.component import LLM
 from api.db import CanvasCategory
 from api.db.services.canvas_service import CanvasTemplateService, UserCanvasService, API4ConversationService
@@ -51,8 +54,153 @@ from api.apps.services.canvas_replica_service import CanvasReplicaService
 from api.db.services.canvas_service import completion as agent_completion
 
 
+class ErrorResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    code: int = 0
+    data: Any | None = None
+    message: str = "string"
+
+
+class SuccessResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    code: int = 0
+    data: Any | None = None
+    message: str = "success"
+
+
+class CanvasRemoveBodyDoc(BaseModel):
+    canvas_ids: list[str]
+
+
+class CanvasSaveBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    dsl: Any
+    title: str
+    id: str | None = None
+    release: bool | None = None
+    canvas_category: str | None = None
+    description: str | None = None
+    permission: str | None = None
+    avatar: str | None = None
+
+
+class CanvasCompletionBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: str
+    query: str | None = ""
+    files: list[Any] | None = None
+    inputs: dict[str, Any] | None = None
+    user_id: str | None = None
+
+
+class CanvasAgentCompletionBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    return_trace: bool | None = False
+
+
+class CanvasRerunBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: str
+    dsl: Any
+    component_id: str
+
+
+class CanvasResetBodyDoc(BaseModel):
+    id: str
+
+
+class CanvasUploadQueryDoc(BaseModel):
+    url: str | None = Field(default=None, description="Optional source URL for upload metadata.")
+
+
+class CanvasUploadBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    file: Any | None = Field(default=None, description="File or files to upload.")
+
+
+class CanvasInputFormQueryDoc(BaseModel):
+    id: str | None = Field(default=None, description="Canvas ID.")
+    component_id: str | None = Field(default=None, description="Component ID.")
+
+
+class CanvasDebugBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: str
+    component_id: str
+    params: dict[str, Any]
+
+
+class CanvasDbConnectBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    db_type: str
+    database: str
+    username: str
+    host: str
+    port: int | str
+    password: str
+
+
+class CanvasListQueryDoc(BaseModel):
+    keywords: str | None = Field(default=None, description="Optional keyword filter.")
+    page: int | None = Field(default=0, description="Page number.")
+    page_size: int | None = Field(default=0, description="Items per page.")
+    orderby: str | None = Field(default="create_time", description="Sort field.")
+    desc: bool | None = Field(default=True, description="Whether to sort descending.")
+    canvas_category: str | None = Field(default=None, description="Optional canvas category filter.")
+    owner_ids: str | None = Field(default=None, description="Comma-separated owner IDs.")
+
+
+class CanvasSettingBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: str
+    title: str
+    permission: str
+    description: str | None = None
+    avatar: str | None = None
+
+
+class CanvasTraceQueryDoc(BaseModel):
+    canvas_id: str | None = Field(default=None, description="Canvas ID.")
+    message_id: str | None = Field(default=None, description="Message ID.")
+
+
+class CanvasSessionsQueryDoc(BaseModel):
+    user_id: str | None = Field(default=None, description="Filter by user ID.")
+    page: int | None = Field(default=1, description="Page number.")
+    page_size: int | None = Field(default=30, description="Items per page.")
+    keywords: str | None = Field(default=None, description="Optional keyword filter.")
+    from_date: str | None = Field(default=None, description="Start date filter.")
+    to_date: str | None = Field(default=None, description="End date filter.")
+    orderby: str | None = Field(default="update_time", description="Sort field.")
+    desc: bool | None = Field(default=True, description="Whether to sort descending.")
+    exp_user_id: str | None = Field(default=None, description="Experimental user ID.")
+    dsl: bool | None = Field(default=True, description="Whether to include DSL in session records.")
+
+
+class CanvasSessionCreateBodyDoc(BaseModel):
+    name: str | None = None
+
+
+class CanvasDownloadQueryDoc(BaseModel):
+    id: str | None = Field(default=None, description="File ID.")
+    created_by: str | None = Field(default=None, description="Creator user ID.")
+
+
 @manager.route('/templates', methods=['GET'])  # noqa: F821
 @login_required
+@tag(["Canvas Templates"])
+@document_response(SuccessResponse)
+@document_response(ErrorResponse, 400)
 def templates():
     return get_json_result(data=[c.to_dict() for c in CanvasTemplateService.get_all()])
 
@@ -60,6 +208,10 @@ def templates():
 @manager.route('/rm', methods=['POST'])  # noqa: F821
 @validate_request("canvas_ids")
 @login_required
+@tag(["Canvases"])
+@document_request(CanvasRemoveBodyDoc)
+@document_response(SuccessResponse)
+@document_response(ErrorResponse, 400)
 async def rm():
     req = await get_request_json()
     for i in req["canvas_ids"]:
@@ -74,6 +226,10 @@ async def rm():
 @manager.route('/set', methods=['POST'])  # noqa: F821
 @validate_request("dsl", "title")
 @login_required
+@tag(["Canvases"])
+@document_request(CanvasSaveBodyDoc)
+@document_response(SuccessResponse)
+@document_response(ErrorResponse, 400)
 async def save():
     req = await get_request_json()
     req['release'] = bool(req.get("release", ""))
@@ -117,6 +273,9 @@ async def save():
 
 @manager.route('/get/<canvas_id>', methods=['GET'])  # noqa: F821
 @login_required
+@tag(["Canvases"])
+@document_response(SuccessResponse)
+@document_response(ErrorResponse, 400)
 def get(canvas_id):
     if not UserCanvasService.accessible(canvas_id, current_user.id):
         return get_data_error_result(message="canvas not found.")
@@ -163,6 +322,8 @@ def get(canvas_id):
 
 
 @manager.route('/getsse/<canvas_id>', methods=['GET'])  # type: ignore # noqa: F821
+@tag(["Canvas Execution"])
+@document_response(ErrorResponse, 400)
 def getsse(canvas_id):
     token = request.headers.get('Authorization').split()
     if len(token) != 2:
@@ -187,6 +348,9 @@ def getsse(canvas_id):
 @manager.route('/completion', methods=['POST'])  # noqa: F821
 @validate_request("id")
 @login_required
+@tag(["Canvas Execution"])
+@document_request(CanvasCompletionBodyDoc)
+@document_response(ErrorResponse, 400)
 async def run():
     req = await get_request_json()
     query = req.get("query", "")
@@ -266,6 +430,9 @@ async def run():
 
 @manager.route("/<canvas_id>/completion", methods=["POST"])  # noqa: F821
 @login_required
+@tag(["Canvas Execution"])
+@document_request(CanvasAgentCompletionBodyDoc)
+@document_response(ErrorResponse, 400)
 async def exp_agent_completion(canvas_id):
     tenant_id = current_user.id
     req = await get_request_json()
@@ -311,6 +478,10 @@ async def exp_agent_completion(canvas_id):
 @manager.route('/rerun', methods=['POST'])  # noqa: F821
 @validate_request("id", "dsl", "component_id")
 @login_required
+@tag(["Canvas Execution"])
+@document_request(CanvasRerunBodyDoc)
+@document_response(SuccessResponse)
+@document_response(ErrorResponse, 400)
 async def rerun():
     req = await get_request_json()
     doc = PipelineOperationLogService.get_documents_info(req["id"])
@@ -338,6 +509,9 @@ async def rerun():
 
 @manager.route('/cancel/<task_id>', methods=['PUT'])  # noqa: F821
 @login_required
+@tag(["Canvas Execution"])
+@document_response(SuccessResponse)
+@document_response(ErrorResponse, 400)
 def cancel(task_id):
     try:
         REDIS_CONN.set(f"{task_id}-cancel", "x")
@@ -349,6 +523,10 @@ def cancel(task_id):
 @manager.route('/reset', methods=['POST'])  # noqa: F821
 @validate_request("id")
 @login_required
+@tag(["Canvas Execution"])
+@document_request(CanvasResetBodyDoc)
+@document_response(SuccessResponse)
+@document_response(ErrorResponse, 400)
 async def reset():
     req = await get_request_json()
     if not UserCanvasService.accessible(req["id"], current_user.id):
@@ -370,6 +548,11 @@ async def reset():
 
 
 @manager.route("/upload/<canvas_id>", methods=["POST"])  # noqa: F821
+@tag(["Canvas Execution"])
+@document_querystring(CanvasUploadQueryDoc)
+@document_request(CanvasUploadBodyDoc)
+@document_response(SuccessResponse)
+@document_response(ErrorResponse, 400)
 async def upload(canvas_id):
     e, cvs = UserCanvasService.get_by_canvas_id(canvas_id)
     if not e:
@@ -389,6 +572,10 @@ async def upload(canvas_id):
 
 @manager.route('/input_form', methods=['GET'])  # noqa: F821
 @login_required
+@tag(["Canvas Utilities"])
+@document_querystring(CanvasInputFormQueryDoc)
+@document_response(SuccessResponse)
+@document_response(ErrorResponse, 400)
 def input_form():
     cvs_id = request.args.get("id")
     cpn_id = request.args.get("component_id")
@@ -410,6 +597,10 @@ def input_form():
 @manager.route('/debug', methods=['POST'])  # noqa: F821
 @validate_request("id", "component_id", "params")
 @login_required
+@tag(["Canvas Utilities"])
+@document_request(CanvasDebugBodyDoc)
+@document_response(SuccessResponse)
+@document_response(ErrorResponse, 400)
 async def debug():
     req = await get_request_json()
     if not UserCanvasService.accessible(req["id"], current_user.id):
@@ -447,6 +638,10 @@ async def debug():
 @manager.route('/test_db_connect', methods=['POST'])  # noqa: F821
 @validate_request("db_type", "database", "username", "host", "port", "password")
 @login_required
+@tag(["Canvas Utilities"])
+@document_request(CanvasDbConnectBodyDoc)
+@document_response(SuccessResponse)
+@document_response(ErrorResponse, 400)
 async def test_db_connect():
     req = await get_request_json()
     try:
@@ -552,6 +747,9 @@ async def test_db_connect():
 #api get list version dsl of canvas
 @manager.route('/getlistversion/<canvas_id>', methods=['GET'])  # noqa: F821
 @login_required
+@tag(["Canvases"])
+@document_response(SuccessResponse)
+@document_response(ErrorResponse, 400)
 def getlistversion(canvas_id):
     try:
         versions =sorted([c.to_dict() for c in UserCanvasVersionService.list_by_canvas_id(canvas_id)], key=lambda x: x["update_time"]*-1)
@@ -563,6 +761,9 @@ def getlistversion(canvas_id):
 #api get version dsl of canvas
 @manager.route('/getversion/<version_id>', methods=['GET'])  # noqa: F821
 @login_required
+@tag(["Canvases"])
+@document_response(SuccessResponse)
+@document_response(ErrorResponse, 400)
 def getversion( version_id):
     try:
         e, version = UserCanvasVersionService.get_by_id(version_id)
@@ -574,6 +775,10 @@ def getversion( version_id):
 
 @manager.route('/list', methods=['GET'])  # noqa: F821
 @login_required
+@tag(["Canvases"])
+@document_querystring(CanvasListQueryDoc)
+@document_response(SuccessResponse)
+@document_response(ErrorResponse, 400)
 def list_canvas():
     keywords = request.args.get("keywords", "")
     page_number = int(request.args.get("page", 0))
@@ -603,6 +808,10 @@ def list_canvas():
 @manager.route('/setting', methods=['POST'])  # noqa: F821
 @validate_request("id", "title", "permission")
 @login_required
+@tag(["Canvases"])
+@document_request(CanvasSettingBodyDoc)
+@document_response(SuccessResponse)
+@document_response(ErrorResponse, 400)
 async def setting():
     req = await get_request_json()
     req["user_id"] = current_user.id
@@ -627,6 +836,10 @@ async def setting():
 
 
 @manager.route('/trace', methods=['GET'])  # noqa: F821
+@tag(["Canvas Utilities"])
+@document_querystring(CanvasTraceQueryDoc)
+@document_response(SuccessResponse)
+@document_response(ErrorResponse, 400)
 def trace():
     cvs_id = request.args.get("canvas_id")
     msg_id = request.args.get("message_id")
@@ -642,6 +855,10 @@ def trace():
 
 @manager.route('/<canvas_id>/sessions', methods=['GET'])  # noqa: F821
 @login_required
+@tag(["Canvas Sessions"])
+@document_querystring(CanvasSessionsQueryDoc)
+@document_response(SuccessResponse)
+@document_response(ErrorResponse, 400)
 def sessions(canvas_id):
     tenant_id = current_user.id
     if not UserCanvasService.accessible(canvas_id, tenant_id):
@@ -678,6 +895,10 @@ def sessions(canvas_id):
 
 @manager.route('/<canvas_id>/sessions', methods=['PUT'])  # noqa: F821
 @login_required
+@tag(["Canvas Sessions"])
+@document_request(CanvasSessionCreateBodyDoc)
+@document_response(SuccessResponse)
+@document_response(ErrorResponse, 400)
 async def set_session(canvas_id):
     req = await get_request_json()
     tenant_id = current_user.id
@@ -708,6 +929,9 @@ async def set_session(canvas_id):
 
 @manager.route('/<canvas_id>/sessions/<session_id>', methods=['GET'])  # noqa: F821
 @login_required
+@tag(["Canvas Sessions"])
+@document_response(SuccessResponse)
+@document_response(ErrorResponse, 400)
 def get_session(canvas_id, session_id):
     tenant_id = current_user.id
     if not UserCanvasService.accessible(canvas_id, tenant_id):
@@ -720,6 +944,9 @@ def get_session(canvas_id, session_id):
 
 @manager.route('/<canvas_id>/sessions/<session_id>', methods=['DELETE'])  # noqa: F821
 @login_required
+@tag(["Canvas Sessions"])
+@document_response(SuccessResponse)
+@document_response(ErrorResponse, 400)
 def del_session(canvas_id, session_id):
     tenant_id = current_user.id
     if not UserCanvasService.accessible(canvas_id, tenant_id):
@@ -731,6 +958,9 @@ def del_session(canvas_id, session_id):
 
 @manager.route('/prompts', methods=['GET'])  # noqa: F821
 @login_required
+@tag(["Canvas Utilities"])
+@document_response(SuccessResponse)
+@document_response(ErrorResponse, 400)
 def prompts():
     from rag.prompts.generator import ANALYZE_TASK_SYSTEM, ANALYZE_TASK_USER, NEXT_STEP, REFLECT, CITATION_PROMPT_TEMPLATE
 
@@ -745,6 +975,9 @@ def prompts():
 
 
 @manager.route('/download', methods=['GET'])  # noqa: F821
+@tag(["Canvas Utilities"])
+@document_querystring(CanvasDownloadQueryDoc)
+@document_response(ErrorResponse, 400)
 async def download():
     id = request.args.get("id")
     created_by = request.args.get("created_by")
