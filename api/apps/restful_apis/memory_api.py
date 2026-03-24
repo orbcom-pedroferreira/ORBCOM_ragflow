@@ -16,8 +16,11 @@
 import logging
 import os
 import time
+from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field
 from quart import request
+from quart_schema import document_querystring, document_request, document_response, tag
 from common.constants import RetCode
 from common.exceptions import ArgumentException, NotFoundException
 from api.apps import login_required, current_user
@@ -26,9 +29,104 @@ from api.apps.services import memory_api_service
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 
 
+class ErrorResponse(BaseModel):
+    code: int = 0
+    data: Any | None = None
+    message: str
+
+
+class GenericSuccessResponse(BaseModel):
+    code: int = 0
+    data: Any | None = None
+    message: str | bool = "success"
+
+
+class MemoryCreateBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    name: str = Field(..., description="Memory name.")
+    memory_type: str = Field(..., description="Memory type.")
+    embd_id: str = Field(..., description="Embedding model ID.")
+    llm_id: str = Field(..., description="LLM model ID.")
+    tenant_embd_id: int | str | None = Field(default=None, description="Tenant embedding model ID.")
+    tenant_llm_id: int | str | None = Field(default=None, description="Tenant LLM model ID.")
+
+
+class MemoryUpdateBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    name: str | None = Field(default=None, description="Memory name.")
+    permissions: Any | None = Field(default=None, description="Permissions configuration.")
+    llm_id: str | None = Field(default=None, description="LLM model ID.")
+    embd_id: str | None = Field(default=None, description="Embedding model ID.")
+    memory_type: str | None = Field(default=None, description="Memory type.")
+    memory_size: int | None = Field(default=None, description="Memory size.")
+    forgetting_policy: Any | None = Field(default=None, description="Forgetting policy.")
+    temperature: float | None = Field(default=None, description="Model temperature.")
+    avatar: str | None = Field(default=None, description="Avatar URL.")
+    description: str | None = Field(default=None, description="Memory description.")
+    system_prompt: str | None = Field(default=None, description="System prompt.")
+    user_prompt: str | None = Field(default=None, description="User prompt.")
+    tenant_llm_id: int | str | None = Field(default=None, description="Tenant LLM model ID.")
+    tenant_embd_id: int | str | None = Field(default=None, description="Tenant embedding model ID.")
+
+
+class MemoryListQueryDoc(BaseModel):
+    memory_type: str | None = Field(default=None, description="Memory type filter.")
+    tenant_id: str | None = Field(default=None, description="Tenant ID filter.")
+    storage_type: str | None = Field(default=None, description="Storage type filter.")
+    keywords: str | None = Field(default=None, description="Optional keyword filter.")
+    page: int | None = Field(default=None, description="Page number.")
+    page_size: int | None = Field(default=None, description="Items per page.")
+
+
+class MemoryMessagesQueryDoc(BaseModel):
+    agent_id: list[str] | str | None = Field(default=None, description="Agent ID filter.")
+    keywords: str | None = Field(default=None, description="Optional keyword filter.")
+    page: int | None = Field(default=None, description="Page number.")
+    page_size: int | None = Field(default=None, description="Items per page.")
+
+
+class MessageCreateBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    memory_id: list[str] | str = Field(..., description="Memory ID or IDs.")
+    agent_id: str = Field(..., description="Agent ID.")
+    session_id: str = Field(..., description="Session ID.")
+    user_input: str = Field(..., description="User message.")
+    agent_response: str = Field(..., description="Agent response.")
+    user_id: str | None = Field(default=None, description="User ID.")
+
+
+class MessageUpdateBodyDoc(BaseModel):
+    status: bool = Field(..., description="Message status.")
+
+
+class MessageSearchQueryDoc(BaseModel):
+    memory_id: list[str] | str | None = Field(default=None, description="Memory ID or IDs.")
+    query: str | None = Field(default=None, description="Search query.")
+    similarity_threshold: float | None = Field(default=None, description="Similarity threshold.")
+    keywords_similarity_weight: float | None = Field(default=None, description="Keyword similarity weight.")
+    top_n: int | None = Field(default=None, description="Maximum number of results.")
+    agent_id: str | None = Field(default=None, description="Agent ID filter.")
+    session_id: str | None = Field(default=None, description="Session ID filter.")
+    user_id: str | None = Field(default=None, description="User ID filter.")
+
+
+class MessageListQueryDoc(BaseModel):
+    memory_id: list[str] | str = Field(..., description="Memory ID or IDs.")
+    agent_id: str | None = Field(default=None, description="Agent ID filter.")
+    session_id: str | None = Field(default=None, description="Session ID filter.")
+    limit: int | None = Field(default=None, description="Maximum number of messages.")
+
+
 @manager.route("/memories", methods=["POST"])  # noqa: F821
 @login_required
 @validate_request("name", "memory_type", "embd_id", "llm_id")
+@tag(["Memories"])
+@document_request(MemoryCreateBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def create_memory():
     timing_enabled = os.getenv("RAGFLOW_API_TIMING")
     t_start = time.perf_counter() if timing_enabled else None
@@ -85,6 +183,10 @@ async def create_memory():
 
 @manager.route("/memories/<memory_id>", methods=["PUT"])  # noqa: F821
 @login_required
+@tag(["Memories"])
+@document_request(MemoryUpdateBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def update_memory(memory_id):
     req = await get_request_json()
     new_settings = {k: req[k] for k in [
@@ -110,6 +212,9 @@ async def update_memory(memory_id):
 
 @manager.route("/memories/<memory_id>", methods=["DELETE"])  # noqa: F821
 @login_required
+@tag(["Memories"])
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def delete_memory(memory_id):
     try:
         await memory_api_service.delete_memory(memory_id)
@@ -124,6 +229,10 @@ async def delete_memory(memory_id):
 
 @manager.route("/memories", methods=["GET"])  # noqa: F821
 @login_required
+@tag(["Memories"])
+@document_querystring(MemoryListQueryDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def list_memory():
     filter_params = {
         k: request.args.get(k) for k in ["memory_type", "tenant_id", "storage_type"] if k in request.args
@@ -141,6 +250,9 @@ async def list_memory():
 
 @manager.route("/memories/<memory_id>/config", methods=["GET"])  # noqa: F821
 @login_required
+@tag(["Memories"])
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def get_memory_config(memory_id):
     try:
         res = await memory_api_service.get_memory_config(memory_id)
@@ -155,6 +267,10 @@ async def get_memory_config(memory_id):
 
 @manager.route("/memories/<memory_id>", methods=["GET"])  # noqa: F821
 @login_required
+@tag(["Memories"])
+@document_querystring(MemoryMessagesQueryDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def get_memory_messages(memory_id):
     args = request.args
     agent_ids = args.getlist("agent_id")
@@ -180,6 +296,10 @@ async def get_memory_messages(memory_id):
 @manager.route("/messages", methods=["POST"]) # noqa: F821
 @login_required
 @validate_request("memory_id", "agent_id", "session_id", "user_input", "agent_response")
+@tag(["Memory Messages"])
+@document_request(MessageCreateBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def add_message():
     req = await get_request_json()
     memory_ids = req["memory_id"]
@@ -201,6 +321,9 @@ async def add_message():
 
 @manager.route("/messages/<memory_id>:<message_id>", methods=["DELETE"]) # noqa: F821
 @login_required
+@tag(["Memory Messages"])
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def forget_message(memory_id: str, message_id: int):
     try:
         res = await memory_api_service.forget_message(memory_id, message_id)
@@ -216,6 +339,10 @@ async def forget_message(memory_id: str, message_id: int):
 @manager.route("/messages/<memory_id>:<message_id>", methods=["PUT"]) # noqa: F821
 @login_required
 @validate_request("status")
+@tag(["Memory Messages"])
+@document_request(MessageUpdateBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def update_message(memory_id: str, message_id: int):
     req = await get_request_json()
     status = req["status"]
@@ -238,6 +365,10 @@ async def update_message(memory_id: str, message_id: int):
 
 @manager.route("/messages/search", methods=["GET"]) # noqa: F821
 @login_required
+@tag(["Memory Messages"])
+@document_querystring(MessageSearchQueryDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def search_message():
     args = request.args
     memory_ids = args.getlist("memory_id")
@@ -268,6 +399,10 @@ async def search_message():
 
 @manager.route("/messages", methods=["GET"]) # noqa: F821
 @login_required
+@tag(["Memory Messages"])
+@document_querystring(MessageListQueryDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def get_messages():
     args = request.args
     memory_ids = args.getlist("memory_id")
@@ -288,6 +423,9 @@ async def get_messages():
 
 @manager.route("/messages/<memory_id>:<message_id>/content", methods=["GET"]) # noqa: F821
 @login_required
+@tag(["Memory Messages"])
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def get_message_content(memory_id: str, message_id: int):
     try:
         res = await memory_api_service.get_message_content(memory_id, message_id)
