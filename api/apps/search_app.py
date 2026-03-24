@@ -15,6 +15,11 @@
 #
 
 from quart import request
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+from quart_schema import document_querystring, document_request, document_response, tag
+
 from api.apps import current_user, login_required
 
 from api.constants import DATASET_NAME_LIMIT
@@ -27,10 +32,90 @@ from common.constants import RetCode, StatusEnum
 from api.utils.api_utils import get_data_error_result, get_json_result, not_allowed_parameters, get_request_json, server_error_response, validate_request
 
 
+class ErrorResponse(BaseModel):
+    code: int
+    message: str
+    data: Any | None = None
+
+
+class GenericSuccessResponse(BaseModel):
+    code: int = 0
+    data: Any | None = None
+    message: str = "success"
+
+
+class SearchCreateBodyDoc(BaseModel):
+    name: str
+    description: str | None = None
+    search_config: dict[str, Any] | None = None
+    model_config = ConfigDict(extra="allow")
+
+
+class SearchUpdateBodyDoc(BaseModel):
+    search_id: str
+    name: str
+    search_config: dict[str, Any]
+    tenant_id: str
+    description: str | None = None
+    model_config = ConfigDict(extra="allow")
+
+
+class SearchDetailQueryDoc(BaseModel):
+    search_id: str
+
+
+class SearchListBodyDoc(BaseModel):
+    owner_ids: list[str] | None = Field(default=None, description="Optional owner/tenant filters.")
+
+
+class SearchListQueryDoc(BaseModel):
+    keywords: str | None = Field(default=None, description="Optional keyword filter.")
+    page: int | None = Field(default=None, description="Page number.")
+    page_size: int | None = Field(default=None, description="Items per page.")
+    orderby: str | None = Field(default="create_time", description="Sort field.")
+    desc: bool | None = Field(default=True, description="Whether to sort descending.")
+
+
+class SearchDeleteBodyDoc(BaseModel):
+    search_id: str
+
+
+class SearchRecordDoc(BaseModel):
+    id: str | None = None
+    name: str | None = None
+    description: str | None = None
+    tenant_id: str | None = None
+    search_config: dict[str, Any] | None = None
+    created_by: str | None = None
+    model_config = ConfigDict(extra="allow")
+
+
+class SearchListDataDoc(BaseModel):
+    search_apps: list[SearchRecordDoc]
+    total: int
+
+
+class SearchListResponseDoc(BaseModel):
+    code: int = 0
+    data: SearchListDataDoc
+    message: str = "success"
+
+
+class SearchResponseDoc(BaseModel):
+    code: int = 0
+    data: SearchRecordDoc | dict[str, Any]
+    message: str = "success"
+
+
 @manager.route("/create", methods=["post"])  # noqa: F821
 @login_required
 @validate_request("name")
+@tag(["Search Apps"])
+@document_request(SearchCreateBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def create():
+    """Create a search app."""
     req = await get_request_json()
     search_name = req["name"]
     description = req.get("description", "")
@@ -65,7 +150,12 @@ async def create():
 @login_required
 @validate_request("search_id", "name", "search_config", "tenant_id")
 @not_allowed_parameters("id", "created_by", "create_time", "update_time", "create_date", "update_date", "created_by")
+@tag(["Search Apps"])
+@document_request(SearchUpdateBodyDoc)
+@document_response(SearchResponseDoc)
+@document_response(ErrorResponse, 400)
 async def update():
+    """Update a search app."""
     req = await get_request_json()
     if not isinstance(req["name"], str):
         return get_data_error_result(message="Search name must be string.")
@@ -120,7 +210,12 @@ async def update():
 
 @manager.route("/detail", methods=["GET"])  # noqa: F821
 @login_required
+@tag(["Search Apps"])
+@document_querystring(SearchDetailQueryDoc)
+@document_response(SearchResponseDoc)
+@document_response(ErrorResponse, 400)
 def detail():
+    """Get search app details."""
     search_id = request.args["search_id"]
     try:
         tenants = UserTenantService.query(user_id=current_user.id)
@@ -140,7 +235,13 @@ def detail():
 
 @manager.route("/list", methods=["POST"])  # noqa: F821
 @login_required
+@tag(["Search Apps"])
+@document_querystring(SearchListQueryDoc)
+@document_request(SearchListBodyDoc)
+@document_response(SearchListResponseDoc)
+@document_response(ErrorResponse, 400)
 async def list_search_app():
+    """List search apps."""
     keywords = request.args.get("keywords", "")
     page_number = int(request.args.get("page", 0))
     items_per_page = int(request.args.get("page_size", 0))
@@ -173,7 +274,12 @@ async def list_search_app():
 @manager.route("/rm", methods=["post"])  # noqa: F821
 @login_required
 @validate_request("search_id")
+@tag(["Search Apps"])
+@document_request(SearchDeleteBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def rm():
+    """Delete a search app."""
     req = await get_request_json()
     search_id = req["search_id"]
     if not SearchService.accessible4deletion(search_id, current_user.id):
