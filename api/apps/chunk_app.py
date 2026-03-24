@@ -18,8 +18,11 @@ import datetime
 import json
 import logging
 import re
+from typing import Any
 import xxhash
+from pydantic import BaseModel, ConfigDict, Field
 from quart import request
+from quart_schema import document_querystring, document_request, document_response, tag
 
 from api.db.services.document_service import DocumentService
 from api.db.services.doc_metadata_service import DocMetadataService
@@ -47,9 +50,102 @@ from common.constants import RetCode, LLMType, ParserType, PAGERANK_FLD
 from common import settings
 from api.apps import login_required, current_user
 
+
+class ErrorResponse(BaseModel):
+    code: int = 0
+    data: Any | None = None
+    message: str
+
+
+class GenericSuccessResponse(BaseModel):
+    code: int = 0
+    data: Any | None = None
+    message: str = "success"
+
+
+class ChunkIdQueryDoc(BaseModel):
+    chunk_id: str = Field(..., description="Chunk ID.")
+
+
+class ChunkKnowledgeGraphQueryDoc(BaseModel):
+    doc_id: str = Field(..., description="Document ID.")
+
+
+class ChunkListBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    doc_id: str = Field(..., description="Document ID.")
+    page: int | None = Field(default=None, description="Page number.")
+    size: int | None = Field(default=None, description="Items per page.")
+    keywords: str | None = Field(default=None, description="Optional keyword filter.")
+    available_int: int | None = Field(default=None, description="Availability filter.")
+
+
+class ChunkUpdateBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    doc_id: str = Field(..., description="Document ID.")
+    chunk_id: str = Field(..., description="Chunk ID.")
+    content_with_weight: str = Field(..., description="Chunk content.")
+    important_kwd: list[str] | None = Field(default=None, description="Important keywords.")
+    question_kwd: list[str] | None = Field(default=None, description="Question keywords.")
+    tag_kwd: Any | None = Field(default=None, description="Tag keywords.")
+    tag_feas: Any | None = Field(default=None, description="Tag features.")
+    available_int: int | None = Field(default=None, description="Availability flag.")
+    image_base64: str | None = Field(default=None, description="Base64-encoded image.")
+    img_id: str | None = Field(default=None, description="Image ID.")
+
+
+class ChunkSwitchBodyDoc(BaseModel):
+    chunk_ids: list[str] = Field(..., description="Chunk IDs to update.")
+    available_int: int = Field(..., description="Availability flag.")
+    doc_id: str = Field(..., description="Document ID.")
+
+
+class ChunkDeleteBodyDoc(BaseModel):
+    doc_id: str = Field(..., description="Document ID.")
+    chunk_ids: list[str] | str | None = Field(default=None, description="Chunk IDs to remove.")
+    delete_all: bool | None = Field(default=None, description="Delete all chunks from the document.")
+
+
+class ChunkCreateBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    doc_id: str = Field(..., description="Document ID.")
+    content_with_weight: str = Field(..., description="Chunk content.")
+    important_kwd: list[str] | None = Field(default=None, description="Important keywords.")
+    question_kwd: list[str] | None = Field(default=None, description="Question keywords.")
+    tag_feas: Any | None = Field(default=None, description="Tag features.")
+    image_base64: str | None = Field(default=None, description="Base64-encoded image.")
+
+
+class ChunkRetrievalTestBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    kb_id: list[str] | str = Field(..., description="Knowledge base ID or IDs.")
+    question: str = Field(..., description="Question to test retrieval with.")
+    page: int | None = Field(default=None, description="Page number.")
+    size: int | None = Field(default=None, description="Items per page.")
+    doc_ids: list[str] | None = Field(default=None, description="Optional document IDs.")
+    use_kg: bool | None = Field(default=None, description="Whether to include knowledge graph retrieval.")
+    top_k: int | None = Field(default=None, description="Maximum retrieval depth.")
+    cross_languages: list[str] | None = Field(default=None, description="Cross-language expansion languages.")
+    search_id: str | None = Field(default=None, description="Search app ID.")
+    meta_data_filter: dict[str, Any] | None = Field(default=None, description="Metadata filter configuration.")
+    tenant_rerank_id: str | None = Field(default=None, description="Tenant rerank model ID.")
+    rerank_id: str | None = Field(default=None, description="Rerank model name.")
+    keyword: bool | None = Field(default=None, description="Whether to expand the query with keywords.")
+    similarity_threshold: float | None = Field(default=None, description="Similarity threshold.")
+    vector_similarity_weight: float | None = Field(default=None, description="Vector similarity weight.")
+
+
 @manager.route('/list', methods=['POST'])  # noqa: F821
 @login_required
 @validate_request("doc_id")
+@tag(["Chunks"])
+@document_request(ChunkListBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def list_chunk():
     req = await get_request_json()
     doc_id = req["doc_id"]
@@ -99,6 +195,10 @@ async def list_chunk():
 
 @manager.route('/get', methods=['GET'])  # noqa: F821
 @login_required
+@tag(["Chunks"])
+@document_querystring(ChunkIdQueryDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 def get():
     chunk_id = request.args["chunk_id"]
     try:
@@ -132,6 +232,10 @@ def get():
 @manager.route('/set', methods=['POST'])  # noqa: F821
 @login_required
 @validate_request("doc_id", "chunk_id", "content_with_weight")
+@tag(["Chunks"])
+@document_request(ChunkUpdateBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def set():
     req = await get_request_json()
     content_with_weight = req["content_with_weight"]
@@ -214,6 +318,10 @@ async def set():
 @manager.route('/switch', methods=['POST'])  # noqa: F821
 @login_required
 @validate_request("chunk_ids", "available_int", "doc_id")
+@tag(["Chunks"])
+@document_request(ChunkSwitchBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def switch():
     req = await get_request_json()
     try:
@@ -237,6 +345,10 @@ async def switch():
 @manager.route('/rm', methods=['POST'])  # noqa: F821
 @login_required
 @validate_request("doc_id")
+@tag(["Chunks"])
+@document_request(ChunkDeleteBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def rm():
     req = await get_request_json()
     try:
@@ -300,6 +412,10 @@ async def rm():
 @manager.route('/create', methods=['POST'])  # noqa: F821
 @login_required
 @validate_request("doc_id", "content_with_weight")
+@tag(["Chunks"])
+@document_request(ChunkCreateBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def create():
     req = await get_request_json()
     req_id = request.headers.get("X-Request-ID")
@@ -394,6 +510,10 @@ async def create():
 @manager.route('/retrieval_test', methods=['POST'])  # noqa: F821
 @login_required
 @validate_request("kb_id", "question")
+@tag(["Chunk Retrieval"])
+@document_request(ChunkRetrievalTestBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def retrieval_test():
     req = await get_request_json()
     page = int(req.get("page", 1))
@@ -522,6 +642,10 @@ async def retrieval_test():
 
 @manager.route('/knowledge_graph', methods=['GET'])  # noqa: F821
 @login_required
+@tag(["Chunk Retrieval"])
+@document_querystring(ChunkKnowledgeGraphQueryDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def knowledge_graph():
     doc_id = request.args["doc_id"]
     tenant_id = DocumentService.get_tenant_id(doc_id)
