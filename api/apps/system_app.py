@@ -16,6 +16,7 @@
 import logging
 from datetime import datetime
 import json
+from typing import Any
 
 from api.apps import login_required, current_user
 
@@ -35,67 +36,104 @@ from timeit import default_timer as timer
 
 from rag.utils.redis_conn import REDIS_CONN
 from quart import jsonify
+from pydantic import BaseModel, Field
+from quart_schema import document_response, tag
 from api.utils.health_utils import run_health_checks, get_oceanbase_status
 from common import settings
 
 
+class ErrorResponse(BaseModel):
+    code: int
+    message: str
+    data: Any | None = None
+
+
+class GenericSuccessResponse(BaseModel):
+    code: int = 0
+    data: Any | None = None
+    message: str = "success"
+
+
+class HealthComponentDoc(BaseModel):
+    status: str | None = None
+    elapsed: str | None = None
+    type: str | None = None
+    storage: str | None = None
+    database: str | None = None
+    error: str | None = None
+
+
+class SystemStatusDoc(BaseModel):
+    doc_engine: dict[str, Any] | None = None
+    storage: HealthComponentDoc | None = None
+    database: HealthComponentDoc | None = None
+    redis: HealthComponentDoc | None = None
+    task_executor_heartbeats: dict[str, Any] = Field(default_factory=dict)
+
+
+class VersionResponseDoc(BaseModel):
+    code: int = 0
+    data: str
+    message: str = "success"
+
+
+class StatusResponseDoc(BaseModel):
+    code: int = 0
+    data: SystemStatusDoc
+    message: str = "success"
+
+
+class OceanBaseStatusResponseDoc(BaseModel):
+    code: int = 0
+    data: dict[str, Any]
+    message: str = "success"
+
+
+class ApiTokenRecordDoc(BaseModel):
+    token: str
+    beta: str | None = None
+    name: str | None = None
+    tenant_id: str | None = None
+    create_time: int | None = None
+    create_date: str | None = None
+    update_time: int | None = None
+    update_date: str | None = None
+
+
+class ApiTokenListResponseDoc(BaseModel):
+    code: int = 0
+    data: list[ApiTokenRecordDoc]
+    message: str = "success"
+
+
+class ConfigResponseDataDoc(BaseModel):
+    registerEnabled: bool | int
+    disablePasswordLogin: bool | int
+
+
+class ConfigResponseDoc(BaseModel):
+    code: int = 0
+    data: ConfigResponseDataDoc
+    message: str = "success"
+
+
 @manager.route("/version", methods=["GET"])  # noqa: F821
 @login_required
+@tag(["System"])
+@document_response(VersionResponseDoc)
+@document_response(ErrorResponse, 400)
 def version():
-    """
-    Get the current version of the application.
-    ---
-    tags:
-      - System
-    security:
-      - ApiKeyAuth: []
-    responses:
-      200:
-        description: Version retrieved successfully.
-        schema:
-          type: object
-          properties:
-            version:
-              type: string
-              description: Version number.
-    """
+    """Get the current version of the application."""
     return get_json_result(data=get_ragflow_version())
 
 
 @manager.route("/status", methods=["GET"])  # noqa: F821
 @login_required
+@tag(["System"])
+@document_response(StatusResponseDoc)
+@document_response(ErrorResponse, 400)
 def status():
-    """
-    Get the system status.
-    ---
-    tags:
-      - System
-    security:
-      - ApiKeyAuth: []
-    responses:
-      200:
-        description: System is operational.
-        schema:
-          type: object
-          properties:
-            es:
-              type: object
-              description: Elasticsearch status.
-            storage:
-              type: object
-              description: Storage status.
-            database:
-              type: object
-              description: Database status.
-      503:
-        description: Service unavailable.
-        schema:
-          type: object
-          properties:
-            error:
-              type: string
-              description: Error message.
-    """
+    """Get the system status."""
     res = {}
     st = timer()
     try:
@@ -172,39 +210,27 @@ def status():
 
 
 @manager.route("/healthz", methods=["GET"])  # noqa: F821
+@tag(["System"])
+@document_response(GenericSuccessResponse)
 def healthz():
     result, all_ok = run_health_checks()
     return jsonify(result), (200 if all_ok else 500)
 
 
 @manager.route("/ping", methods=["GET"])  # noqa: F821
+@tag(["System"])
+@document_response(GenericSuccessResponse)
 async def ping():
     return "pong", 200
 
 
 @manager.route("/oceanbase/status", methods=["GET"])  # noqa: F821
 @login_required
+@tag(["System"])
+@document_response(OceanBaseStatusResponseDoc)
+@document_response(ErrorResponse, 400)
 def oceanbase_status():
-    """
-    Get OceanBase health status and performance metrics.
-    ---
-    tags:
-      - System
-    security:
-      - ApiKeyAuth: []
-    responses:
-      200:
-        description: OceanBase status retrieved successfully.
-        schema:
-          type: object
-          properties:
-            status:
-              type: string
-              description: Status (alive/timeout).
-            message:
-              type: object
-              description: Detailed status information including health and performance metrics.
-    """
+    """Get OceanBase health status and performance metrics."""
     try:
         status_info = get_oceanbase_status()
         return get_json_result(data=status_info)
@@ -220,30 +246,11 @@ def oceanbase_status():
 
 @manager.route("/new_token", methods=["POST"])  # noqa: F821
 @login_required
+@tag(["API Tokens"])
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 def new_token():
-    """
-    Generate a new API token.
-    ---
-    tags:
-      - API Tokens
-    security:
-      - ApiKeyAuth: []
-    parameters:
-      - in: query
-        name: name
-        type: string
-        required: false
-        description: Name of the token.
-    responses:
-      200:
-        description: Token generated successfully.
-        schema:
-          type: object
-          properties:
-            token:
-              type: string
-              description: The generated API token.
-    """
+    """Generate a new API token."""
     try:
         tenants = UserTenantService.query(user_id=current_user.id)
         if not tenants:
@@ -270,35 +277,11 @@ def new_token():
 
 @manager.route("/token_list", methods=["GET"])  # noqa: F821
 @login_required
+@tag(["API Tokens"])
+@document_response(ApiTokenListResponseDoc)
+@document_response(ErrorResponse, 400)
 def token_list():
-    """
-    List all API tokens for the current user.
-    ---
-    tags:
-      - API Tokens
-    security:
-      - ApiKeyAuth: []
-    responses:
-      200:
-        description: List of API tokens.
-        schema:
-          type: object
-          properties:
-            tokens:
-              type: array
-              items:
-                type: object
-                properties:
-                  token:
-                    type: string
-                    description: The API token.
-                  name:
-                    type: string
-                    description: Name of the token.
-                  create_time:
-                    type: string
-                    description: Token creation time.
-    """
+    """List all API tokens for the current user."""
     try:
         tenants = UserTenantService.query(user_id=current_user.id)
         if not tenants:
@@ -318,30 +301,11 @@ def token_list():
 
 @manager.route("/token/<token>", methods=["DELETE"])  # noqa: F821
 @login_required
+@tag(["API Tokens"])
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 def rm(token):
-    """
-    Remove an API token.
-    ---
-    tags:
-      - API Tokens
-    security:
-      - ApiKeyAuth: []
-    parameters:
-      - in: path
-        name: token
-        type: string
-        required: true
-        description: The API token to remove.
-    responses:
-      200:
-        description: Token removed successfully.
-        schema:
-          type: object
-          properties:
-            success:
-              type: boolean
-              description: Deletion status.
-    """
+    """Remove an API token."""
     try:
         tenants = UserTenantService.query(user_id=current_user.id)
         if not tenants:
@@ -355,22 +319,10 @@ def rm(token):
 
 
 @manager.route("/config", methods=["GET"])  # noqa: F821
+@tag(["System"])
+@document_response(ConfigResponseDoc)
 def get_config():
-    """
-    Get system configuration.
-    ---
-    tags:
-        - System
-    responses:
-        200:
-            description: Return system configuration
-            schema:
-                type: object
-                properties:
-                    registerEnable:
-                        type: integer 0 means disabled, 1 means enabled
-                        description: Whether user registration is enabled
-    """
+    """Get system configuration."""
     return get_json_result(data={
         "registerEnabled": settings.REGISTER_ENABLED,
         "disablePasswordLogin": settings.DISABLE_PASSWORD_LOGIN,
