@@ -17,16 +17,57 @@
 
 from api.apps import current_user, login_required
 from langfuse import Langfuse
+from pydantic import BaseModel, ConfigDict
+from quart_schema import document_request, document_response, tag
 
 from api.db.db_models import DB
 from api.db.services.langfuse_service import TenantLangfuseService
 from api.utils.api_utils import get_error_data_result, get_json_result, get_request_json, server_error_response, validate_request
 
 
+class ErrorResponse(BaseModel):
+    code: int
+    message: str
+    data: dict | None = None
+
+
+class LangfuseApiKeyBodyDoc(BaseModel):
+    secret_key: str
+    public_key: str
+    host: str
+
+
+class LangfuseApiKeyRecordDoc(BaseModel):
+    tenant_id: str | None = None
+    secret_key: str | None = None
+    public_key: str | None = None
+    host: str | None = None
+    project_id: str | None = None
+    project_name: str | None = None
+    model_config = ConfigDict(extra="allow")
+
+
+class LangfuseApiKeyResponseDoc(BaseModel):
+    code: int = 0
+    data: LangfuseApiKeyRecordDoc | None = None
+    message: str = "success"
+
+
+class LangfuseDeleteResponseDoc(BaseModel):
+    code: int = 0
+    data: bool | None = None
+    message: str = "success"
+
+
 @manager.route("/api_key", methods=["POST", "PUT"])  # noqa: F821
 @login_required
 @validate_request("secret_key", "public_key", "host")
+@tag(["Langfuse"])
+@document_request(LangfuseApiKeyBodyDoc)
+@document_response(LangfuseApiKeyResponseDoc)
+@document_response(ErrorResponse, 400)
 async def set_api_key():
+    """Create or update Langfuse API keys."""
     req = await get_request_json()
     secret_key = req.get("secret_key", "")
     public_key = req.get("public_key", "")
@@ -61,7 +102,11 @@ async def set_api_key():
 @manager.route("/api_key", methods=["GET"])  # noqa: F821
 @login_required
 @validate_request()
+@tag(["Langfuse"])
+@document_response(LangfuseApiKeyResponseDoc)
+@document_response(ErrorResponse, 400)
 def get_api_key():
+    """Get Langfuse API keys for the current user."""
     current_user_id = current_user.id
     langfuse_entry = TenantLangfuseService.filter_by_tenant_with_info(tenant_id=current_user_id)
     if not langfuse_entry:
@@ -85,7 +130,11 @@ def get_api_key():
 @manager.route("/api_key", methods=["DELETE"])  # noqa: F821
 @login_required
 @validate_request()
+@tag(["Langfuse"])
+@document_response(LangfuseDeleteResponseDoc)
+@document_response(ErrorResponse, 400)
 def delete_api_key():
+    """Delete Langfuse API keys for the current user."""
     current_user_id = current_user.id
     langfuse_entry = TenantLangfuseService.filter_by_tenant(tenant_id=current_user_id)
     if not langfuse_entry:
