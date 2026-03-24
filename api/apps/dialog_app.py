@@ -13,8 +13,11 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field
 from quart import request
+from quart_schema import document_querystring, document_request, document_response, tag
 from api.db.services import duplicate_name
 from api.db.services.dialog_service import DialogService
 from common.constants import StatusEnum
@@ -29,9 +32,67 @@ from api.apps import login_required, current_user
 import logging
 
 
+class ErrorResponse(BaseModel):
+    code: int = 0
+    data: Any | None = None
+    message: str
+
+
+class GenericSuccessResponse(BaseModel):
+    code: int = 0
+    data: Any | None = None
+    message: str = "success"
+
+
+class DialogGetQueryDoc(BaseModel):
+    dialog_id: str = Field(..., description="Dialog ID.")
+
+
+class DialogSetBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    prompt_config: dict[str, Any] = Field(..., description="Prompt configuration.")
+    dialog_id: str | None = Field(default=None, description="Dialog ID for updates.")
+    name: str | None = Field(default=None, description="Dialog name.")
+    description: str | None = Field(default=None, description="Dialog description.")
+    icon: str | None = Field(default=None, description="Dialog icon.")
+    top_n: int | None = Field(default=None, description="Top-N retrieval count.")
+    top_k: int | None = Field(default=None, description="Top-K retrieval depth.")
+    rerank_id: str | None = Field(default=None, description="Rerank model ID.")
+    tenant_rerank_id: int | str | None = Field(default=None, description="Tenant rerank model ID.")
+    similarity_threshold: float | None = Field(default=None, description="Similarity threshold.")
+    vector_similarity_weight: float | None = Field(default=None, description="Vector similarity weight.")
+    llm_setting: dict[str, Any] | None = Field(default=None, description="LLM settings.")
+    meta_data_filter: dict[str, Any] | None = Field(default=None, description="Metadata filter configuration.")
+    kb_ids: list[str] | None = Field(default=None, description="Knowledge base IDs.")
+    llm_id: str | None = Field(default=None, description="LLM ID.")
+    tenant_llm_id: int | str | None = Field(default=None, description="Tenant LLM ID.")
+
+
+class DialogListNextQueryDoc(BaseModel):
+    keywords: str | None = Field(default=None, description="Optional keyword filter.")
+    page: int | None = Field(default=None, description="Page number.")
+    page_size: int | None = Field(default=None, description="Items per page.")
+    parser_id: str | None = Field(default=None, description="Parser ID filter.")
+    orderby: str | None = Field(default=None, description="Sort field.")
+    desc: str | bool | None = Field(default=None, description="Whether to sort descending.")
+
+
+class DialogListNextBodyDoc(BaseModel):
+    owner_ids: list[str] | None = Field(default=None, description="Owner tenant IDs.")
+
+
+class DialogDeleteBodyDoc(BaseModel):
+    dialog_ids: list[str] = Field(..., description="Dialog IDs to delete.")
+
+
 @manager.route('/set', methods=['POST'])  # noqa: F821
 @validate_request("prompt_config")
 @login_required
+@tag(["Dialogs"])
+@document_request(DialogSetBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def set_dialog():
     req = await get_request_json()
     dialog_info = ensure_tenant_model_id_for_params(current_user.id, req)
@@ -151,6 +212,10 @@ async def set_dialog():
 
 @manager.route('/get', methods=['GET'])  # noqa: F821
 @login_required
+@tag(["Dialogs"])
+@document_querystring(DialogGetQueryDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 def get():
     dialog_id = request.args["dialog_id"]
     try:
@@ -177,6 +242,9 @@ def get_kb_names(kb_ids):
 
 @manager.route('/list', methods=['GET'])  # noqa: F821
 @login_required
+@tag(["Dialogs"])
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 def list_dialogs():
     try:
         conversations = DialogService.query(
@@ -194,6 +262,11 @@ def list_dialogs():
 
 @manager.route('/next', methods=['POST'])  # noqa: F821
 @login_required
+@tag(["Dialogs"])
+@document_querystring(DialogListNextQueryDoc)
+@document_request(DialogListNextBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def list_dialogs_next():
     args = request.args
     keywords = args.get("keywords", "")
@@ -233,6 +306,10 @@ async def list_dialogs_next():
 @manager.route('/rm', methods=['POST'])  # noqa: F821
 @login_required
 @validate_request("dialog_ids")
+@tag(["Dialogs"])
+@document_request(DialogDeleteBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def rm():
     req = await get_request_json()
     dialog_list=[]
