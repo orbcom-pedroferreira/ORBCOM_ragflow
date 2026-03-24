@@ -17,7 +17,11 @@ import asyncio
 import logging
 import json
 import os
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 from quart import request
+from quart_schema import document_querystring, document_request, document_response, tag
 
 from api.apps import login_required, current_user
 from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMService
@@ -29,8 +33,88 @@ from rag.utils.base64_image import test_image
 from rag.llm import EmbeddingModel, ChatModel, RerankModel, CvModel, TTSModel, OcrModel, Seq2txtModel
 
 
+class ErrorResponse(BaseModel):
+    code: int = 0
+    data: Any | None = None
+    message: str
+
+
+class GenericSuccessResponse(BaseModel):
+    code: int = 0
+    data: Any | None = None
+    message: str | bool = "success"
+
+
+class SetApiKeyBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    llm_factory: str = Field(..., description="LLM factory name.")
+    api_key: str = Field(..., description="API key.")
+    base_url: str | None = Field(default=None, description="API base URL.")
+    source_fid: str | None = Field(default=None, description="Source factory ID.")
+    verify: bool | None = Field(default=None, description="Whether to verify only.")
+    model_type: str | None = Field(default=None, description="Model type.")
+    llm_name: str | None = Field(default=None, description="LLM name.")
+
+
+class AddLlmBodyDoc(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    llm_factory: str = Field(..., description="LLM factory name.")
+    model_type: str | None = Field(default=None, description="Model type.")
+    llm_name: str | None = Field(default=None, description="LLM name.")
+    api_key: str | None = Field(default=None, description="API key.")
+    api_base: str | None = Field(default=None, description="API base URL.")
+    max_tokens: int | None = Field(default=None, description="Maximum tokens.")
+    verify: bool | None = Field(default=None, description="Whether to verify only.")
+
+    ark_api_key: str | None = Field(default=None, description="VolcEngine API key.")
+    endpoint_id: str | None = Field(default=None, description="VolcEngine endpoint ID.")
+    tencent_cloud_sid: str | None = Field(default=None, description="Tencent Cloud SID.")
+    tencent_cloud_sk: str | None = Field(default=None, description="Tencent Cloud SK.")
+    auth_mode: str | None = Field(default=None, description="Bedrock auth mode.")
+    bedrock_ak: str | None = Field(default=None, description="Bedrock access key.")
+    bedrock_sk: str | None = Field(default=None, description="Bedrock secret key.")
+    bedrock_region: str | None = Field(default=None, description="Bedrock region.")
+    aws_role_arn: str | None = Field(default=None, description="AWS role ARN.")
+    spark_api_password: str | None = Field(default=None, description="Spark API password.")
+    spark_app_id: str | None = Field(default=None, description="Spark app ID.")
+    spark_api_secret: str | None = Field(default=None, description="Spark API secret.")
+    spark_api_key: str | None = Field(default=None, description="Spark API key.")
+    yiyan_ak: str | None = Field(default=None, description="Baidu Yiyan access key.")
+    yiyan_sk: str | None = Field(default=None, description="Baidu Yiyan secret key.")
+    fish_audio_ak: str | None = Field(default=None, description="Fish Audio API key.")
+    fish_audio_refid: str | None = Field(default=None, description="Fish Audio reference ID.")
+    google_project_id: str | None = Field(default=None, description="Google project ID.")
+    google_region: str | None = Field(default=None, description="Google region.")
+    google_service_account_key: str | None = Field(default=None, description="Google service account key.")
+    api_version: str | None = Field(default=None, description="Azure OpenAI API version.")
+    provider_order: str | None = Field(default=None, description="Provider order.")
+
+
+class LlmFactoryBodyDoc(BaseModel):
+    llm_factory: str = Field(..., description="LLM factory name.")
+
+
+class LlmNameBodyDoc(BaseModel):
+    llm_factory: str = Field(..., description="LLM factory name.")
+    llm_name: str = Field(..., description="LLM name.")
+    status: str | int | None = Field(default=None, description="Desired status.")
+
+
+class MyLlmsQueryDoc(BaseModel):
+    include_details: bool | str | None = Field(default=None, description="Whether to include detailed model metadata.")
+
+
+class LlmListQueryDoc(BaseModel):
+    model_type: str | None = Field(default=None, description="Model type filter.")
+
+
 @manager.route("/factories", methods=["GET"])  # noqa: F821
 @login_required
+@tag(["LLM Factories"])
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 def factories():
     try:
         fac = get_allowed_llm_factories()
@@ -59,6 +143,10 @@ def factories():
 @manager.route("/set_api_key", methods=["POST"])  # noqa: F821
 @login_required
 @validate_request("llm_factory", "api_key")
+@tag(["Tenant LLMs"])
+@document_request(SetApiKeyBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def set_api_key():
     req = await get_request_json()
     # test if api key works
@@ -159,6 +247,10 @@ async def set_api_key():
 @manager.route("/add_llm", methods=["POST"])  # noqa: F821
 @login_required
 @validate_request("llm_factory")
+@tag(["Tenant LLMs"])
+@document_request(AddLlmBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def add_llm():
     req = await get_request_json()
     factory = req["llm_factory"]
@@ -359,6 +451,10 @@ async def add_llm():
 @manager.route("/delete_llm", methods=["POST"])  # noqa: F821
 @login_required
 @validate_request("llm_factory", "llm_name")
+@tag(["Tenant LLMs"])
+@document_request(LlmNameBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def delete_llm():
     req = await get_request_json()
     TenantLLMService.filter_delete([TenantLLM.tenant_id == current_user.id, TenantLLM.llm_factory == req["llm_factory"], TenantLLM.llm_name == req["llm_name"]])
@@ -368,6 +464,10 @@ async def delete_llm():
 @manager.route("/enable_llm", methods=["POST"])  # noqa: F821
 @login_required
 @validate_request("llm_factory", "llm_name")
+@tag(["Tenant LLMs"])
+@document_request(LlmNameBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def enable_llm():
     req = await get_request_json()
     TenantLLMService.filter_update(
@@ -379,6 +479,10 @@ async def enable_llm():
 @manager.route("/delete_factory", methods=["POST"])  # noqa: F821
 @login_required
 @validate_request("llm_factory")
+@tag(["Tenant LLMs"])
+@document_request(LlmFactoryBodyDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def delete_factory():
     req = await get_request_json()
     TenantLLMService.filter_delete([TenantLLM.tenant_id == current_user.id, TenantLLM.llm_factory == req["llm_factory"]])
@@ -387,6 +491,10 @@ async def delete_factory():
 
 @manager.route("/my_llms", methods=["GET"])  # noqa: F821
 @login_required
+@tag(["Tenant LLMs"])
+@document_querystring(MyLlmsQueryDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 def my_llms():
     try:
         TenantLLMService.ensure_mineru_from_env(current_user.id)
@@ -433,6 +541,10 @@ def my_llms():
 
 @manager.route("/list", methods=["GET"])  # noqa: F821
 @login_required
+@tag(["Tenant LLMs"])
+@document_querystring(LlmListQueryDoc)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
 async def list_app():
     self_deployed = ["FastEmbed", "Ollama", "Xinference", "LocalAI", "LM-Studio", "GPUStack"]
     weighted = []
