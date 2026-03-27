@@ -143,6 +143,31 @@ async def update(tenant_id, chat_id, session_id):
     return get_result()
 
 
+@manager.route("/agents/<agent_id>/sessions/<session_id>", methods=["PUT"])  # noqa: F821
+@token_required
+@tag(["SDK Sessions"])
+@document_request(SessionUpdateBody, source=DataSource.JSON)
+@document_response(GenericSuccessResponse)
+@document_response(ErrorResponse, 400)
+async def update_agent_session(tenant_id, agent_id, session_id):
+    req = await get_request_json()
+    conv_id = session_id
+    conv = API4ConversationService.query(id=conv_id, dialog_id=agent_id)
+    if not conv:
+        return get_error_data_result(message="Session does not exist")
+    if not UserCanvasService.query(id=agent_id, user_id=tenant_id, status=StatusEnum.VALID.value):
+        return get_error_data_result(message="You do not own the session")
+    if "message" in req or "messages" in req:
+        return get_error_data_result(message="`message` can not be change")
+    if "reference" in req:
+        return get_error_data_result(message="`reference` can not be change")
+    if "name" in req and not req.get("name"):
+        return get_error_data_result(message="`name` can not be empty.")
+    if not API4ConversationService.update_by_id(conv_id, req):
+        return get_error_data_result(message="Session updates error")
+    return get_result()
+
+
 @manager.route("/chats/<chat_id>/completions", methods=["POST"])  # noqa: F821
 @token_required
 async def chat_completion(tenant_id, chat_id):

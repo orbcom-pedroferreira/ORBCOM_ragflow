@@ -3882,6 +3882,79 @@ Failure:
 
 ---
 
+### Update agent's session
+
+**PUT** `/api/v1/agents/{agent_id}/sessions/{session_id}`
+
+Updates a session of a specified agent.
+
+#### Request
+
+- Method: PUT
+- URL: `/api/v1/agents/{agent_id}/sessions/{session_id}`
+- Headers:
+  - `'Content-Type: application/json'`
+  - `'Authorization: Bearer <YOUR_API_KEY>'`
+- Body:
+  - `"name"`: `string`
+
+##### Request example
+
+```bash
+curl --request PUT \
+     --url http://{address}/api/v1/agents/{agent_id}/sessions/{session_id} \
+     --header 'Content-Type: application/json' \
+     --header 'Authorization: Bearer <YOUR_API_KEY>' \
+     --data '
+     {
+          "name": "<REVISED_SESSION_NAME_HERE>"
+     }'
+```
+
+##### Request Parameters
+
+- `agent_id`: (*Path parameter*)  
+  The ID of the associated agent.
+- `session_id`: (*Path parameter*)  
+  The ID of the session to update.
+- `"name"`: (*Body Parameter*), `string`  
+  The revised name of the session.
+
+#### Response
+
+Success:
+
+```json
+{
+    "code": 0
+}
+```
+
+Failure:
+
+```json
+{
+    "code": 102,
+    "message": "Session does not exist"
+}
+```
+
+```json
+{
+    "code": 102,
+    "message": "`name` can not be empty."
+}
+```
+
+```json
+{
+    "code": 102,
+    "message": "You do not own the session"
+}
+```
+
+---
+
 ### Converse with agent
 
 **POST** `/api/v1/agents/{agent_id}/completions`  
